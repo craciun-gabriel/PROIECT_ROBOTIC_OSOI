@@ -1,66 +1,95 @@
-def build_physical_maze(sim, maze, start_x=0.0, start_y=0.0):
-    """
-    Construiește un labirint profesional cu pereți subțiri și culoare largi.
-    """
-    print("Se construiesc pereții 3D și marginile arenei...")
-    wall_height = 0.4
+def build_physical_maze(sim, maze, robot_handle, goal_pos, path_width=0.65, wall_thickness=0.1, wall_height=0.4):
+    """Construiește mediul fizic cu MĂȘTI DE COLIZIUNE explicite pentru a susține robotul."""
+    print("Se construiește mediul 3D...")
     
-    # --- PARAMETRI CHEIE ---
-    w_p = 0.65  # Lățimea drumului (pe unde merge robotul)
-    w_w = 0.1   # Grosimea peretelui (foarte subțire)
-    overlap = 0.02 # O mică suprapunere pentru ca pereții să se îmbine perfect la colțuri
+    w_p = path_width
+    w_w = wall_thickness
+    overlap = 0.02 
     
-    def get_coord_and_size(idx):
-        """Calculează poziția și dimensiunea fizică în funcție de tipul celulei (drum sau perete)."""
-        if idx % 2 == 0:
-            # Este o celulă de drum (indecși pari)
-            pos = (idx // 2) * (w_p + w_w) + (w_p / 2.0)
-            return pos, w_p
-        else:
-            # Este o celulă de perete (indecși impari)
-            pos = (idx // 2) * (w_p + w_w) + w_p + (w_w / 2.0)
-            return pos, w_w
+    handles_created = []
+    rows, cols = len(maze), len(maze[0])
+    
+    total_x = (cols // 2 + 1) * w_p + (cols // 2) * w_w
+    total_y = (rows // 2 + 1) * w_p + (rows // 2) * w_w
+    
+    start_x = -total_x / 2.0 + w_p / 2.0
+    start_y = -total_y / 2.0 + w_p / 2.0
+    
+    # Lăsăm robotul să cadă de la 30 cm
+    sim.setObjectPosition(robot_handle, sim.handle_world, [start_x, start_y, 0.3]) 
+    
+    floor_thickness = 0.05
+    
+    # --- 1. PODEAUA (Beton armat digital) ---
+    floor_handle = sim.createPrimitiveShape(sim.primitiveshape_cuboid, [total_x + 0.2, total_y + 0.2, floor_thickness], 0)
+    if floor_handle != -1:
+        sim.setObjectPosition(floor_handle, sim.handle_world, [0, 0, floor_thickness / 2.0]) 
+        
+        sim.setObjectInt32Param(floor_handle, 3003, 1) # 3003 = Statică (ca să nu cadă și ea cu totul)
+        sim.setObjectInt32Param(floor_handle, 3004, 1) # 3004 = Respondable (obiect cu masă fizică)
+        sim.setObjectInt32Param(floor_handle, 3019, 65535) # 3019 = Mască Coliziune (se lovește de TOATE obiectele)
+        
+        sim.setShapeColor(floor_handle, None, sim.colorcomponent_ambient_diffuse, [0.3, 0.3, 0.3])
+        handles_created.append(floor_handle)
 
-    # --- 1. CONSTRUIREA OBSTACOLELOR INTERIOARE ---
+    def get_coord_and_size(idx):
+        if idx % 2 == 0:
+            return (idx // 2) * (w_p + w_w) + (w_p / 2.0), w_p
+        else:
+            return (idx // 2) * (w_p + w_w) + w_p + (w_w / 2.0), w_w
+
+    # --- 2. OBSTACOLE INTERIOARE ---
     for y, row in enumerate(maze):
         for x, cell in enumerate(row):
             if cell == 1:
                 cx, sx = get_coord_and_size(x)
                 cy, sy = get_coord_and_size(y)
                 
-                # Creăm blocul 3D
                 sizes = [sx + overlap, sy + overlap, wall_height]
                 wall_handle = sim.createPrimitiveShape(sim.primitiveshape_cuboid, sizes, 0)
                 
                 if wall_handle != -1:
-                    # Aliniem labirintul astfel încât robotul să fie fix în centrul primei celule (0,0)
                     pos_x = start_x + cx - (w_p / 2.0)
                     pos_y = start_y + cy - (w_p / 2.0)
-                    pos_z = wall_height / 2.0 
+                    pos_z = floor_thickness + wall_height / 2.0 
+                    sim.setObjectPosition(wall_handle, sim.handle_world, [pos_x, pos_y, pos_z]) 
                     
-                    sim.setObjectPosition(wall_handle, sim.handle_world, [pos_x, pos_y, pos_z]) #
                     sim.setObjectInt32Param(wall_handle, 3003, 1)
+                    sim.setObjectInt32Param(wall_handle, 3004, 1)
+                    sim.setObjectInt32Param(wall_handle, 3019, 65535) # Coliziune activată și la pereți
+                    
+                    handles_created.append(wall_handle)
 
-    # --- 2. CONSTRUIREA BORDURILOR EXTERIOARE ---
-    rows, cols = len(maze), len(maze[0])
-    total_x = (cols // 2 + 1) * w_p + (cols // 2) * w_w
-    total_y = (rows // 2 + 1) * w_p + (rows // 2) * w_w
-    
-    center_x = start_x + total_x / 2.0 - w_p / 2.0
-    center_y = start_y + total_y / 2.0 - w_p / 2.0
-    b_thick = 0.1 # Grosimea bordurii
-    
+    # --- 3. BORDURI EXTERIOARE ---
+    b_thick = 0.1 
     borders = [
-        ([total_x + b_thick*2, b_thick, wall_height], [center_x, start_y - w_p/2 - b_thick/2, wall_height/2]), # Sus
-        ([total_x + b_thick*2, b_thick, wall_height], [center_x, start_y + total_y - w_p/2 + b_thick/2, wall_height/2]), # Jos
-        ([b_thick, total_y, wall_height], [start_x - w_p/2 - b_thick/2, center_y, wall_height/2]), # Stânga
-        ([b_thick, total_y, wall_height], [start_x + total_x - w_p/2 + b_thick/2, center_y, wall_height/2]) # Dreapta
+        ([total_x + b_thick*2, b_thick, wall_height], [0, -total_y/2 - b_thick/2, floor_thickness + wall_height/2]),
+        ([total_x + b_thick*2, b_thick, wall_height], [0, total_y/2 + b_thick/2, floor_thickness + wall_height/2]),
+        ([b_thick, total_y, wall_height], [-total_x/2 - b_thick/2, 0, floor_thickness + wall_height/2]),
+        ([b_thick, total_y, wall_height], [total_x/2 + b_thick/2, 0, floor_thickness + wall_height/2])
     ]
-    
     for size, pos in borders:
         b_handle = sim.createPrimitiveShape(sim.primitiveshape_cuboid, size, 0)
         if b_handle != -1:
-            sim.setObjectPosition(b_handle, sim.handle_world, pos) #
+            sim.setObjectPosition(b_handle, sim.handle_world, pos) 
             sim.setObjectInt32Param(b_handle, 3003, 1)
-            
-    print("Construcția labirintului a fost finalizată cu succes!")
+            sim.setObjectInt32Param(b_handle, 3004, 1)
+            sim.setObjectInt32Param(b_handle, 3019, 65535) # Coliziune activată
+            handles_created.append(b_handle)
+
+    # --- 4. MARKER DESTINAȚIE (Asta rămâne Hologramă!) ---
+    gx, gy = goal_pos
+    cx, _ = get_coord_and_size(gx)
+    cy, _ = get_coord_and_size(gy)
+    dest_x = start_x + cx - (w_p / 2.0)
+    dest_y = start_y + cy - (w_p / 2.0)
+    
+    # Parametrul de coliziune LIPSĂ intenționat, ca robotul să poată călca pe el!
+    dest_handle = sim.createPrimitiveShape(sim.primitiveshape_cuboid, [w_p, w_p, 0.02], 0)
+    if dest_handle != -1:
+        sim.setObjectPosition(dest_handle, sim.handle_world, [dest_x, dest_y, floor_thickness + 0.01]) 
+        sim.setObjectInt32Param(dest_handle, 3003, 1) 
+        sim.setShapeColor(dest_handle, None, sim.colorcomponent_ambient_diffuse, [0.1, 0.9, 0.1]) 
+        handles_created.append(dest_handle)
+
+    return handles_created
